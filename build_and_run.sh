@@ -176,6 +176,7 @@ int main(int argc, char** argv, char**) {
 		// run script
 		if (luaL_dofile(L, argv[1])) {
 			std::cerr << "Lua error: " << lua_tostring(L, -1) << std::endl;
+			traceback();
 		}
 	}
 
