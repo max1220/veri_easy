@@ -35,7 +35,7 @@ Returns a table associating signal names with signal IDs, e.g. `io.inputs.clk`, 
 
 Gets the current value for the specified `signal_id`.
 
-### n = get_signal(signal_id, value)
+### set_signal(signal_id, value)
 
 Sets the current value for the specified `signal_id`.
 
