@@ -1,8 +1,10 @@
 # veri_easy
 
+`Easy verilog build and test tool using bash, Lua, and C++`
+
 This repository contains a simple build script that takes in a verilog file,
-extracts inputs/outputs using verilators's --xml-only option,
-parses them in bash, and generates a simple C++ main file that embeds a Lua
+extracts inputs/outputs using verilators's `--xml-only` option and `xmlstarlet`,
+parses them in bash, generates a simple C++ main file that embeds a Lua
 interpreter to control the verilated model, and then compiles a
 complete binary using verilator, containing the Lua interpreter.
 
