@@ -77,16 +77,19 @@ $(
 // Lua-callable function: Get signal value
 static int lua_get_signal(lua_State* L) {
 	V${TOP_MODULE}* topp = (V${TOP_MODULE}*)lua_touserdata(L, lua_upvalueindex(1));
-	int id = luaL_checkinteger(L, 1);
-	switch(id) {
+	int arg_c = lua_gettop(L);
+	for (int arg_i=1; arg_i<=arg_c; arg_i++) {
+		int id = luaL_checkinteger(L, arg_i);
+		switch(id) {
 $(
 	for i in "${!MODULE_OUTPUT_NAMES[@]}"; do
-		printf "\t\tcase %.3d: lua_pushinteger(L, topp->%s); break;\n" "$i" "${MODULE_OUTPUT_NAMES[$i]}"
+		printf "\t\t\tcase %.3d: lua_pushinteger(L, topp->%s); break;\n" "$i" "${MODULE_OUTPUT_NAMES[$i]}"
 	done
 )
-		default: lua_pushnil(L);
+			default: lua_pushnil(L);
+		}
 	}
-	return 1;
+	return arg_c;
 }
 
 // Lua-callable function: Set signal value
@@ -97,13 +100,28 @@ static int lua_set_signal(lua_State* L) {
 	switch(id) {
 $(
 	for i in "${!MODULE_INPUT_NAMES[@]}"; do
-		printf "\t\tcase %.3d: topp->%s = value;\n" "$i" "${MODULE_INPUT_NAMES[$i]}"
+		printf "\t\tcase %.3d: topp->%s = value; break; \n" "$i" "${MODULE_INPUT_NAMES[$i]}"
 	done
 )
 		default: lua_pushnil(L); return 1;
 	}
 	lua_pushboolean(L, 1);
 	return 1;
+}
+
+static int lua_clock_pulse(lua_State *L) {
+	V${TOP_MODULE}* topp = (V${TOP_MODULE}*)lua_touserdata(L, lua_upvalueindex(1));
+	VerilatedContext* contextp = (VerilatedContext*)lua_touserdata(L, lua_upvalueindex(2));
+	int count = luaL_checkinteger(L, 1);
+	for (int i=1; i<=count; i++) {
+		topp->clk = 1;
+		topp->eval();
+		contextp->timeInc(1);
+		topp->clk = 0;
+		topp->eval();
+		contextp->timeInc(1);
+	}
+	return 0;
 }
 
 // Lua-callable function: Evaluate the model
@@ -123,7 +141,7 @@ static int lua_is_finished(lua_State* L) {
 }
 
 // Set up Lua environment(4 global C functions: get, set, eval, is_finished)
-static void setup_lua(lua_State* L, V${TOP_MODULE}* topp, VerilatedContext* contextp) {
+static void setup_lua_functions(lua_State* L, V${TOP_MODULE}* topp, VerilatedContext* contextp) {
 	lua_pushlightuserdata(L, topp);
 	lua_pushcclosure(L, lua_list_signals, 1);
 	lua_setglobal(L, "list_signals");
@@ -138,6 +156,11 @@ static void setup_lua(lua_State* L, V${TOP_MODULE}* topp, VerilatedContext* cont
 
 	lua_pushlightuserdata(L, topp);
 	lua_pushlightuserdata(L, contextp);
+	lua_pushcclosure(L, lua_clock_pulse, 2);
+	lua_setglobal(L, "clock_pulse");
+
+	lua_pushlightuserdata(L, topp);
+	lua_pushlightuserdata(L, contextp);
 	lua_pushcclosure(L, lua_eval, 2);
 	lua_setglobal(L, "eval");
 
@@ -146,17 +169,14 @@ static void setup_lua(lua_State* L, V${TOP_MODULE}* topp, VerilatedContext* cont
 	lua_setglobal(L, "is_finished");
 }
 
-// call debug.traceback to get a stack trace on error
-static int traceback(lua_State *L) {
-	if (!lua_isstring(L, 1)) { return 1; }
-	lua_getfield(L, LUA_GLOBALSINDEX, "debug");
-	if (!lua_istable(L, -1)) { lua_pop(L, 1); return 1; }
-	lua_getfield(L, -1, "traceback");
-	if (!lua_isfunction(L, -1)) { lua_pop(L, 2); return 1; }
-	lua_pushvalue(L, 1);
-	lua_pushinteger(L, 2);
-	lua_call(L, 2, 1);
-	return 1;
+static void setup_lua_args(lua_State *L, int argc, char** argv) {
+	lua_newtable(L);
+	for (int i=0; i<argc; i++) {
+		lua_pushinteger(L, i);
+		lua_pushstring(L, argv[i]);
+		lua_settable(L, -3);
+	}
+	lua_setglobal(L, "arg");
 }
 
 // create top-level verilog module and run Lua script
@@ -170,7 +190,8 @@ int main(int argc, char** argv, char**) {
 	// Initialize Lua
 	lua_State* L = luaL_newstate();
 	luaL_openlibs(L);
-	setup_lua(L, topp.get(), contextp.get());
+	setup_lua_functions(L, topp.get(), contextp.get());
+	setup_lua_args(L, argc, argv);
 
 	if (argc == 1) {
 		// run Lua interpreter
@@ -179,8 +200,7 @@ int main(int argc, char** argv, char**) {
 	} else {
 		// run script
 		if (luaL_dofile(L, argv[1])) {
-			std::cerr << "Lua error: " << lua_tostring(L, -1) << std::endl;
-			traceback();
+			std::cerr << "Error: " << lua_tostring(L, -1) << std::endl;
 		}
 	}
 
@@ -195,9 +215,10 @@ EOF
 echo -e "\e[33m --- Building executable ---\e[0m"
 
 # build executable
-time verilator --build --cc --exe lua_main.cpp \
- -x-assign fast --noassert --pins-sc-biguint --debug-check \
- -CFLAGS "$(pkg-config --cflags lua5.1)" -LDFLAGS "$(pkg-config --libs lua5.1)" \
+LUAVER="luajit"
+time verilator -j 0 --build --cc --exe lua_main.cpp \
+ --assert --pins-sc-biguint --x-initial unique --x-assign unique \
+ -CFLAGS "$(pkg-config --cflags "${LUAVER}")" -LDFLAGS "$(pkg-config --libs "${LUAVER}")" \
  --top "${TOP_MODULE}" "${TOP_MODULE}.v"
 
 # run generated executable
